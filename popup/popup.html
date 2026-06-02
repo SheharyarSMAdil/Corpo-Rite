@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CorpoRite</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>CorpoRite</span>
+      </div>
+      <label class="toggle" title="Enable or disable suggestions">
+        <input type="checkbox" id="enabled" checked />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <main class="main">
+      <section class="field">
+        <label for="formality">Formality</label>
+        <select id="formality">
+          <option value="casual">Casual professional</option>
+          <option value="professional" selected>Professional</option>
+          <option value="formal">Formal</option>
+          <option value="executive">Executive</option>
+        </select>
+      </section>
+
+      <section class="field row">
+        <div>
+          <label for="autoSuggest">Auto-suggest while typing</label>
+          <p class="hint">Off by default — uses API only when you press the shortcut.</p>
+        </div>
+        <label class="toggle small">
+          <input type="checkbox" id="autoSuggest" />
+          <span class="slider"></span>
+        </label>
+      </section>
+
+      <section class="field row">
+        <div>
+          <label for="preserveTone">Keep original tone</label>
+          <p class="hint">Preserve your voice instead of neutral corporate tone.</p>
+        </div>
+        <label class="toggle small">
+          <input type="checkbox" id="preserveTone" />
+          <span class="slider"></span>
+        </label>
+      </section>
+
+      <section class="status" id="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking API key…</span>
+      </section>
+
+      <a class="link" href="#" id="openOptions">Full settings & API key →</a>
+    </main>
+
+    <footer class="footer">
+      <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> open &nbsp;·&nbsp;
+      <kbd>Ctrl</kbd>+<kbd>Enter</kbd> accept
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
