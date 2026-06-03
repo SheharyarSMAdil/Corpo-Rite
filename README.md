@@ -1,6 +1,6 @@
 # CorpoRite
 
-Chrome extension that watches what you type in **Hinglish** (or informal Indian English) on any website and suggests **professional corporate English** in real time. Accept a suggestion with one click to replace your text in place.
+A Chrome extension that provides real-time suggestions for **professional corporate English** as you type in Hinglish (or informal Indian English) on any website. You can accept the suggestions with a single click to replace your text directly.
 
 ## Features
 
