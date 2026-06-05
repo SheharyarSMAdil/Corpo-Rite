@@ -34,6 +34,11 @@ export const DEFAULT_SETTINGS = {
 
 export const SHORTCUT_LABEL = "Alt+Shift+C";
 
+export const LENGTH_MODIFIERS = {
+  extend: "Make the text noticeably longer with polite detail and clarity, without changing the core meaning.",
+  shorten: "Make the text noticeably shorter and more concise while keeping the same meaning.",
+};
+
 export const STORAGE_KEYS = {
   settings: "corpwrite_settings",
 };

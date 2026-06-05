@@ -24,6 +24,7 @@
   let observedRoot = null;
   let panelManuallyMoved = false;
   let dragState = null;
+  let accepting = false;
 
   function resolveEditableRoot(el) {
     if (!el || el.closest?.("#corpwrite-root")) return null;
@@ -32,9 +33,12 @@
     if (tag === "textarea") return !el.disabled && !el.readOnly ? el : null;
     if (tag === "input") {
       const type = (el.type || "text").toLowerCase();
-      if (!["text", "search", "email", "url", "tel", ""].includes(type) || el.disabled || el.readOnly) {
-        return null;
-      }
+      if (type === "password" || type === "email" || el.disabled || el.readOnly) return null;
+
+      const autocomplete = (el.autocomplete || "").toLowerCase();
+      if (autocomplete.includes("password") || autocomplete === "email") return null;
+
+      if (!["text", "search", "url", "tel", ""].includes(type)) return null;
       return el;
     }
 
@@ -120,45 +124,37 @@
     return el?.dataset?.testid === "conversation-compose-box-input";
   }
 
-  /** WhatsApp Lexical: replace entire compose box (avoids append/duplicate bugs). */
-  function replaceWhatsAppCompose(el, text) {
-    el.focus();
+  function normalizeCompareText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function textMatches(el, expected) {
+    return normalizeCompareText(getText(el)) === normalizeCompareText(expected);
+  }
+
+  function selectAllInEditable(el) {
     const range = document.createRange();
     range.selectNodeContents(el);
     const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(range);
+    return range;
+  }
 
-    const before = new InputEvent("beforeinput", {
-      bubbles: true,
-      cancelable: true,
-      inputType: "insertReplacementText",
-      data: text,
-    });
-    el.dispatchEvent(before);
-    if (before.defaultPrevented) return;
+  /** WhatsApp Lexical: single replace path — delete all, insert once. */
+  function replaceWhatsAppCompose(el, text) {
+    el.focus();
+    selectAllInEditable(el);
+    document.execCommand("delete", false, null);
 
-    let inserted = false;
+    selectAllInEditable(el);
     try {
-      inserted = document.execCommand("insertText", false, text);
+      document.execCommand("insertText", false, text);
     } catch {
-      inserted = false;
+      /* fall through to DOM rebuild */
     }
-    if (inserted) return;
 
-    try {
-      const dt = new DataTransfer();
-      dt.setData("text/plain", text);
-      const paste = new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-        clipboardData: dt,
-      });
-      el.dispatchEvent(paste);
-      if (paste.defaultPrevented) return;
-    } catch {
-      // Continue to DOM fallback
-    }
+    if (textMatches(el, text)) return;
 
     const templateP = el.querySelector("p");
     const templateSpan = el.querySelector("[data-lexical-text]");
@@ -188,21 +184,12 @@
       endRange.setStart(span, 0);
     }
     endRange.collapse(true);
+    const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(endRange);
-
-    // DOM fallback needs an input signal so WhatsApp syncs internal editor state.
-    el.dispatchEvent(
-      new InputEvent("input", {
-        bubbles: true,
-        inputType: "insertReplacementText",
-        data: text,
-      })
-    );
-
   }
 
-  /** Generic Lexical: one replacement path only — never stack insert + events. */
+  /** Generic Lexical: delete range, insert once. */
   function replaceLexicalRange(el, start, end, text) {
     el.focus();
     const range = createRangeFromOffsets(el, start, end);
@@ -210,34 +197,9 @@
     if (!sel) return;
     sel.removeAllRanges();
     sel.addRange(range);
-
-    const before = new InputEvent("beforeinput", {
-      bubbles: true,
-      cancelable: true,
-      inputType: "insertReplacementText",
-      data: text,
-    });
-    el.dispatchEvent(before);
-    if (before.defaultPrevented) return;
-
     range.deleteContents();
     sel.removeAllRanges();
     sel.addRange(range);
-
-    try {
-      const dt = new DataTransfer();
-      dt.setData("text/plain", text);
-      const paste = new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-        clipboardData: dt,
-      });
-      el.dispatchEvent(paste);
-      if (paste.defaultPrevented) return;
-    } catch {
-      /* ClipboardEvent may be limited in some contexts */
-    }
-
     document.execCommand("insertText", false, text);
   }
 
@@ -366,6 +328,10 @@
           <div class="corpwrite-original" data-original></div>
           <div class="corpwrite-label">Suggestion</div>
           <div class="corpwrite-suggestion is-loading" data-suggestion>Improving your text…</div>
+          <div class="corpwrite-length-actions">
+            <button type="button" class="corpwrite-btn corpwrite-btn-secondary corpwrite-btn-compact" data-extend disabled title="Make the suggestion longer">Extend</button>
+            <button type="button" class="corpwrite-btn corpwrite-btn-secondary corpwrite-btn-compact" data-shorten disabled title="Make the suggestion shorter">Shorten</button>
+          </div>
           <div class="corpwrite-actions">
             <button type="button" class="corpwrite-btn corpwrite-btn-primary" data-accept disabled>Accept</button>
             <button type="button" class="corpwrite-btn corpwrite-btn-secondary" data-regenerate disabled>Regenerate</button>
@@ -379,9 +345,18 @@
 
     root.querySelector(".corpwrite-close").addEventListener("click", hidePanel);
     root.querySelector("[data-dismiss]").addEventListener("click", hidePanel);
-    root.querySelector("[data-accept]").addEventListener("click", acceptSuggestion);
+    root.querySelector("[data-accept]").addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      acceptSuggestion();
+    });
     root.querySelector("[data-regenerate]").addEventListener("click", () => {
       if (lastContext) requestRewrite(lastContext, true);
+    });
+    root.querySelector("[data-extend]").addEventListener("click", () => {
+      requestLengthAdjust("extend");
+    });
+    root.querySelector("[data-shorten]").addEventListener("click", () => {
+      requestLengthAdjust("shorten");
     });
 
     document.addEventListener(
@@ -462,7 +437,7 @@
       return;
     }
     const rect = el.getBoundingClientRect();
-    const panelHeight = 220;
+    const panelHeight = 260;
     let top = rect.bottom + 8;
     if (top + panelHeight > window.innerHeight - 12) {
       top = Math.max(12, rect.top - panelHeight - 8);
@@ -474,16 +449,28 @@
     p.style.left = `${left}px`;
   }
 
+  function setPanelButtonsDisabled(disabled) {
+    if (!panel) return;
+    panel.querySelector("[data-accept]").disabled = disabled;
+    panel.querySelector("[data-regenerate]").disabled = disabled;
+    panel.querySelector("[data-extend]").disabled = disabled;
+    panel.querySelector("[data-shorten]").disabled = disabled;
+  }
+
+  function setPanelLoading(message) {
+    const p = ensurePanel();
+    const sug = p.querySelector("[data-suggestion]");
+    sug.className = "corpwrite-suggestion is-loading";
+    sug.textContent = message;
+    setPanelButtonsDisabled(true);
+  }
+
   function showPanel(el, context) {
     const p = ensurePanel();
     positionPanel(el);
     p.hidden = false;
     p.querySelector("[data-original]").textContent = context.text;
-    const sug = p.querySelector("[data-suggestion]");
-    sug.className = "corpwrite-suggestion is-loading";
-    sug.textContent = "Improving your text…";
-    p.querySelector("[data-accept]").disabled = true;
-    p.querySelector("[data-regenerate]").disabled = true;
+    setPanelLoading("Improving your text…");
   }
 
   function hidePanel() {
@@ -496,8 +483,8 @@
     const sug = p.querySelector("[data-suggestion]");
     sug.className = "corpwrite-suggestion is-error";
     sug.textContent = message;
-    p.querySelector("[data-accept]").disabled = true;
-    p.querySelector("[data-regenerate]").disabled = false;
+    setPanelButtonsDisabled(true);
+    panel.querySelector("[data-regenerate]").disabled = false;
   }
 
   function showSuggestion(suggestion, context) {
@@ -508,29 +495,74 @@
       sug.className = "corpwrite-suggestion";
       sug.textContent = "Already polished — no changes needed.";
       p.querySelector("[data-accept]").disabled = true;
+      p.querySelector("[data-extend]").disabled = true;
+      p.querySelector("[data-shorten]").disabled = true;
     } else {
       sug.className = "corpwrite-suggestion";
       sug.textContent = suggestion;
       p.querySelector("[data-accept]").disabled = false;
+      p.querySelector("[data-extend]").disabled = false;
+      p.querySelector("[data-shorten]").disabled = false;
     }
     p.querySelector("[data-regenerate]").disabled = false;
-    lastContext = { ...context, suggestion };
+    lastContext = { ...context, suggestion, targetElement: activeElement };
+  }
+
+  function requestLengthAdjust(lengthMode) {
+    if (!lastContext?.suggestion) return;
+    const context = {
+      ...lastContext,
+      text: lastContext.suggestion,
+    };
+    requestRewrite(context, true, { lengthMode, keepPanel: true });
+  }
+
+  function fallbackCopyToClipboard(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.documentElement.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+
+  function copyToClipboard(text) {
+    if (!text) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopyToClipboard(text));
+      return;
+    }
+    fallbackCopyToClipboard(text);
   }
 
   function acceptSuggestion() {
-    if (!lastContext || !activeElement) return;
-    const { start, end, full, suggestion } = lastContext;
+    if (accepting || !lastContext) return;
+    accepting = true;
 
-    if (activeElement.isContentEditable) {
-      if (isWhatsAppCompose(activeElement)) {
-        replaceWhatsAppCompose(activeElement, suggestion);
+    const { start, end, full, suggestion, targetElement } = lastContext;
+    const el = targetElement || activeElement;
+
+    try {
+      if (!el) return;
+
+      if (el.isContentEditable) {
+        if (isWhatsAppCompose(el)) {
+          replaceWhatsAppCompose(el, suggestion);
+        } else {
+          replaceContentEditableRange(el, start, end, suggestion);
+        }
       } else {
-        replaceContentEditableRange(activeElement, start, end, suggestion);
+        setText(el, full.slice(0, start) + suggestion + full.slice(end));
       }
-    } else {
-      setText(activeElement, full.slice(0, start) + suggestion + full.slice(end));
+
+      copyToClipboard(suggestion);
+      showToast("Accepted — copied to clipboard");
+    } finally {
+      accepting = false;
+      hidePanel();
     }
-    hidePanel();
   }
 
   function showToast(message) {
@@ -576,12 +608,24 @@
     return e.altKey && e.shiftKey && key === "c";
   }
 
-  async function requestRewrite(context, force) {
+  async function requestRewrite(context, force, options = {}) {
     if (!settings.enabled && !force) return;
+    const { lengthMode = null, keepPanel = false } = options;
     const id = ++requestId;
-    showPanel(activeElement, context);
 
-    chrome.runtime.sendMessage({ type: "REWRITE", text: context.text }, (response) => {
+    if (keepPanel) {
+      const loadingMsg =
+        lengthMode === "extend"
+          ? "Extending your text…"
+          : lengthMode === "shorten"
+            ? "Shortening your text…"
+            : "Improving your text…";
+      setPanelLoading(loadingMsg);
+    } else {
+      showPanel(activeElement, context);
+    }
+
+    chrome.runtime.sendMessage({ type: "REWRITE", text: context.text, lengthMode }, (response) => {
       if (id !== requestId) return;
       if (chrome.runtime.lastError) {
         showError("Extension error. Reload the page and try again.");
@@ -670,8 +714,13 @@
   }
 
   function onFocusIn(e) {
+    if (e.target.closest?.("#corpwrite-root")) return;
+
     const root = resolveEditableRoot(e.target);
-    if (!root) return;
+    if (!root) {
+      if (panel && !panel.hidden) hidePanel();
+      return;
+    }
     activeElement = root;
     attachMutationObserver(root);
     const h = ensureHint();

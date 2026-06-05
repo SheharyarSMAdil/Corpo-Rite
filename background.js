@@ -1,4 +1,4 @@
-import { FORMALITY_LEVELS, DEFAULT_SETTINGS, STORAGE_KEYS } from "./shared/constants.js";
+import { FORMALITY_LEVELS, DEFAULT_SETTINGS, STORAGE_KEYS, LENGTH_MODIFIERS } from "./shared/constants.js";
 
 async function getSettings() {
   const result = await chrome.storage.sync.get(STORAGE_KEYS.settings);
@@ -22,7 +22,17 @@ Rules:
 - Return ONLY the rewritten text. No quotes, labels, or explanation.`;
 }
 
-async function rewriteWithOpenAI(text, settings) {
+function buildUserPrompt(text, lengthMode) {
+  if (lengthMode === "extend") {
+    return `Rewrite this text for corporate use. ${LENGTH_MODIFIERS.extend}\n\n${text}`;
+  }
+  if (lengthMode === "shorten") {
+    return `Rewrite this text for corporate use. ${LENGTH_MODIFIERS.shorten}\n\n${text}`;
+  }
+  return `Rewrite this text for corporate use:\n\n${text}`;
+}
+
+async function rewriteWithOpenAI(text, settings, lengthMode = null) {
   if (!settings.apiKey?.trim()) {
     throw new Error("NO_API_KEY");
   }
@@ -38,10 +48,7 @@ async function rewriteWithOpenAI(text, settings) {
       temperature: settings.preserveTone ? 0.5 : 0.3,
       messages: [
         { role: "system", content: buildSystemPrompt(settings) },
-        {
-          role: "user",
-          content: `Rewrite this text for corporate use:\n\n${text}`,
-        },
+        { role: "user", content: buildUserPrompt(text, lengthMode) },
       ],
       max_tokens: 1024,
     }),
@@ -78,7 +85,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ ok: false, error: "Extension is disabled" });
           return;
         }
-        const suggestion = await rewriteWithOpenAI(message.text, settings);
+        const suggestion = await rewriteWithOpenAI(message.text, settings, message.lengthMode);
         sendResponse({ ok: true, suggestion });
       } catch (err) {
         sendResponse({ ok: false, error: err.message || "Rewrite failed" });

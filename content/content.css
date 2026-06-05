@@ -137,6 +137,18 @@
   color: #b91c1c;
 }
 
+.corpwrite-length-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.corpwrite-btn-compact {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
 .corpwrite-actions {
   display: flex;
   gap: 8px;
