@@ -24,6 +24,8 @@ export const FORMALITY_LEVELS = {
 export const DEFAULT_SETTINGS = {
   enabled: true,
   autoSuggest: false,
+  restrictToSites: false,
+  allowedSites: [],
   formality: "professional",
   preserveTone: false,
   debounceMs: 700,

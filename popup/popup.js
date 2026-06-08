@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../shared/constants.js";
+import { isUrlAllowed } from "../shared/siteMatcherModule.js";
 
 async function loadSettings() {
   const result = await chrome.storage.sync.get(STORAGE_KEYS.settings);
@@ -12,19 +13,36 @@ async function saveSettings(partial) {
   return next;
 }
 
-function setStatus(hasApiKey, enabled) {
+async function isCurrentTabAllowed(settings) {
+  if (!settings.restrictToSites) return true;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url) return false;
+  try {
+    return isUrlAllowed(new URL(tab.url), settings);
+  } catch {
+    return false;
+  }
+}
+
+async function setStatus(settings) {
   const dot = document.getElementById("statusDot");
   const text = document.getElementById("statusText");
+  const hasApiKey = Boolean(settings.apiKey?.trim());
+  const onAllowedSite = await isCurrentTabAllowed(settings);
+
   dot.className = "dot";
   if (!hasApiKey) {
     dot.classList.add("warn");
     text.textContent = "Add API key in settings to enable AI";
-  } else if (!enabled) {
+  } else if (!settings.enabled) {
     dot.classList.add("warn");
     text.textContent = "CorpoRite is paused";
+  } else if (!onAllowedSite) {
+    dot.classList.add("warn");
+    text.textContent = "Not enabled on this website";
   } else {
     dot.classList.add("ok");
-    text.textContent = "Ready on all websites";
+    text.textContent = settings.restrictToSites ? "Ready on allowed websites" : "Ready on all websites";
   }
 }
 
@@ -36,11 +54,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("formality").value = settings.formality;
   document.getElementById("preserveTone").checked = settings.preserveTone;
 
-  setStatus(Boolean(settings.apiKey?.trim()), settings.enabled);
+  await setStatus(settings);
 
   document.getElementById("enabled").addEventListener("change", async (e) => {
     const s = await saveSettings({ enabled: e.target.checked });
-    setStatus(Boolean(s.apiKey?.trim()), s.enabled);
+    await setStatus(s);
   });
 
   document.getElementById("autoSuggest").addEventListener("change", (e) => {

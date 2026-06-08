@@ -57,6 +57,32 @@
         </section>
 
         <section class="card">
+          <h2>Allowed websites</h2>
+          <div class="switch-row">
+            <div>
+              <strong>Only run on selected websites</strong>
+              <p>When on, CorpoRite works only on URLs you list below. When off, it runs on all sites.</p>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="restrictToSites" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <label for="allowedSites">Website URLs (one per line)</label>
+          <textarea
+            id="allowedSites"
+            rows="6"
+            placeholder="web.whatsapp.com&#10;mail.google.com&#10;linkedin.com&#10;https://app.slack.com"
+          ></textarea>
+          <p class="desc">
+            Use a domain (<code>web.whatsapp.com</code>), partial host (<code>linkedin</code>), or full URL prefix
+            (<code>https://mail.google.com</code>).
+          </p>
+          <button type="button" class="btn-ghost" id="addCurrentSite">Add current tab's website</button>
+        </section>
+
+        <section class="card">
           <h2>Behavior</h2>
           <div class="switch-row">
             <div>

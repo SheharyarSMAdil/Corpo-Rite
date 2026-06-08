@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CorpoRite",
-  "version": "1.1.12",
+  "version": "1.2.0",
   "commands": {
     "open-suggestion": {
       "suggested_key": {
@@ -12,7 +12,7 @@
     }
   },
   "description": "Convert Hinglish typing into professional corporate English with real-time suggestions on any website.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
   "host_permissions": ["https://api.openai.com/*"],
   "background": {
     "service_worker": "background.js",
@@ -39,7 +39,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
+      "js": ["shared/siteMatcher.js", "content/content.js"],
       "css": ["content/content.css"],
       "run_at": "document_idle",
       "all_frames": true

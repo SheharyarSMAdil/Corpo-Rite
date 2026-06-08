@@ -8,9 +8,13 @@
   let settings = {
     enabled: true,
     autoSuggest: false,
+    restrictToSites: false,
+    allowedSites: [],
     debounceMs: DEBOUNCE_DEFAULT,
     minChars: MIN_CHARS_DEFAULT,
   };
+
+  let siteAllowed = true;
 
   let toastTimer = null;
 
@@ -26,6 +30,19 @@
   let dragState = null;
   let accepting = false;
   let replacing = false;
+
+  function refreshSiteAllowed() {
+    const matcher = globalThis.CorpoRiteSiteMatcher;
+    siteAllowed = matcher ? matcher.isUrlAllowed(location, settings) : true;
+    if (!siteAllowed) {
+      detachMutationObserver();
+      if (panel && !panel.hidden) hidePanel();
+    }
+  }
+
+  function canRunOnThisPage() {
+    return settings.enabled && siteAllowed;
+  }
 
   function resolveEditableRoot(el) {
     if (!el || el.closest?.("#corpwrite-root")) return null;
@@ -575,6 +592,10 @@
       showToast("CorpoRite is paused — enable it in the toolbar");
       return;
     }
+    if (!siteAllowed) {
+      showToast("CorpoRite is not enabled on this website — add it in settings");
+      return;
+    }
 
     const root = resolveEditableRoot(document.activeElement) || activeElement;
     if (!root || !isFocusInEditable(root)) {
@@ -600,7 +621,7 @@
   }
 
   async function requestRewrite(context, force, options = {}) {
-    if (!settings.enabled && !force) return;
+    if ((!settings.enabled || !siteAllowed) && !force) return;
     const { lengthMode = null, keepPanel = false } = options;
     const id = ++requestId;
 
@@ -647,7 +668,7 @@
   }
 
   function attachMutationObserver(root) {
-    if (!settings.autoSuggest || !shouldObserveForAutoSuggest(root)) return;
+    if (!settings.autoSuggest || !siteAllowed || !shouldObserveForAutoSuggest(root)) return;
     const compose = getWhatsAppCompose(root) || root;
     const observeTarget = compose.closest?.(".lexical-rich-text-input") || compose;
     if (observedRoot === observeTarget && mutationObserver) return;
@@ -656,7 +677,7 @@
     observedRoot = observeTarget;
     mutationObserver = new MutationObserver(() => {
       if (replacing || accepting) return;
-      if (!settings.enabled || !settings.autoSuggest || !isFocusInEditable(compose)) return;
+      if (!canRunOnThisPage() || !settings.autoSuggest || !isFocusInEditable(compose)) return;
       activeElement = compose;
       scheduleRewrite(compose);
     });
@@ -687,7 +708,7 @@
   }
 
   function handleEditableActivity(sourceEl) {
-    if (!settings.enabled || replacing || accepting) return;
+    if (!canRunOnThisPage() || replacing || accepting) return;
     const root = resolveEditableRoot(sourceEl);
     if (!root) return;
     activeElement = getWhatsAppCompose(root) || root;
@@ -713,6 +734,7 @@
 
   function onFocusIn(e) {
     if (e.target.closest?.("#corpwrite-root")) return;
+    if (!canRunOnThisPage()) return;
 
     const root = resolveEditableRoot(e.target);
     if (!root) {
@@ -752,6 +774,7 @@
     chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
       if (response?.ok && response.settings) {
         settings = { ...settings, ...response.settings };
+        refreshSiteAllowed();
         const badge = document.querySelector("#corpwrite-root [data-formality]");
         if (badge && response.settings.formality) {
           badge.textContent = response.settings.formality;
@@ -763,7 +786,8 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && changes.corpwrite_settings) {
       settings = { ...settings, ...changes.corpwrite_settings.newValue };
-      if (!settings.autoSuggest) {
+      refreshSiteAllowed();
+      if (!settings.autoSuggest || !siteAllowed) {
         detachMutationObserver();
       } else if (activeElement) {
         attachMutationObserver(activeElement);
