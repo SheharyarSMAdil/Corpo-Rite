@@ -36,6 +36,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  document.getElementById("openPrivacy").addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: chrome.runtime.getURL("privacy-policy.html") });
+  });
+
   document.getElementById("settingsForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const next = {

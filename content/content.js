@@ -25,6 +25,7 @@
   let panelManuallyMoved = false;
   let dragState = null;
   let accepting = false;
+  let replacing = false;
 
   function resolveEditableRoot(el) {
     if (!el || el.closest?.("#corpwrite-root")) return null;
@@ -121,7 +122,16 @@
   }
 
   function isWhatsAppCompose(el) {
-    return el?.dataset?.testid === "conversation-compose-box-input";
+    return (
+      el?.dataset?.testid === "conversation-compose-box-input" ||
+      !!el?.closest?.('[data-testid="conversation-compose-box-input"]')
+    );
+  }
+
+  function getWhatsAppCompose(el) {
+    if (!el) return null;
+    if (el.dataset?.testid === "conversation-compose-box-input") return el;
+    return el.closest?.('[data-testid="conversation-compose-box-input"]') || null;
   }
 
   function normalizeCompareText(value) {
@@ -141,52 +151,32 @@
     return range;
   }
 
-  /** WhatsApp Lexical: single replace path — delete all, insert once. */
+  /**
+   * WhatsApp uses Lexical — must update editor state via input events only.
+   * Never rebuild DOM directly or Send will use stale internal text.
+   */
   function replaceWhatsAppCompose(el, text) {
-    el.focus();
-    selectAllInEditable(el);
-    document.execCommand("delete", false, null);
+    const compose = getWhatsAppCompose(el) || el;
+    replacing = true;
 
-    selectAllInEditable(el);
     try {
+      compose.focus();
+      selectAllInEditable(compose);
+
+      const before = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertReplacementText",
+        data: text,
+      });
+      compose.dispatchEvent(before);
+      if (before.defaultPrevented) return;
+
+      // insertText with full selection replaces content; Lexical listens to native input
       document.execCommand("insertText", false, text);
-    } catch {
-      /* fall through to DOM rebuild */
+    } finally {
+      replacing = false;
     }
-
-    if (textMatches(el, text)) return;
-
-    const templateP = el.querySelector("p");
-    const templateSpan = el.querySelector("[data-lexical-text]");
-
-    while (el.firstChild) el.removeChild(el.firstChild);
-
-    const p = document.createElement("p");
-    if (templateP) {
-      p.className = templateP.className;
-      if (templateP.dir) p.dir = templateP.dir;
-    } else {
-      p.dir = "ltr";
-    }
-
-    const span = document.createElement("span");
-    if (templateSpan) span.className = templateSpan.className;
-    span.setAttribute("data-lexical-text", "true");
-    span.textContent = text;
-    p.appendChild(span);
-    el.appendChild(p);
-
-    const endRange = document.createRange();
-    const textNode = span.firstChild;
-    if (textNode) {
-      endRange.setStart(textNode, text.length);
-    } else {
-      endRange.setStart(span, 0);
-    }
-    endRange.collapse(true);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(endRange);
   }
 
   /** Generic Lexical: delete range, insert once. */
@@ -550,6 +540,7 @@
       if (el.isContentEditable) {
         if (isWhatsAppCompose(el)) {
           replaceWhatsAppCompose(el, suggestion);
+          el.focus();
         } else {
           replaceContentEditableRange(el, start, end, suggestion);
         }
@@ -651,18 +642,25 @@
     }
   }
 
+  function shouldObserveForAutoSuggest(root) {
+    return isLexicalEditor(root) || isWhatsAppCompose(root);
+  }
+
   function attachMutationObserver(root) {
-    if (!settings.autoSuggest || !isLexicalEditor(root)) return;
-    if (observedRoot === root && mutationObserver) return;
+    if (!settings.autoSuggest || !shouldObserveForAutoSuggest(root)) return;
+    const compose = getWhatsAppCompose(root) || root;
+    const observeTarget = compose.closest?.(".lexical-rich-text-input") || compose;
+    if (observedRoot === observeTarget && mutationObserver) return;
 
     detachMutationObserver();
-    observedRoot = root;
+    observedRoot = observeTarget;
     mutationObserver = new MutationObserver(() => {
-      if (!settings.enabled || !settings.autoSuggest || !isFocusInEditable(root)) return;
-      activeElement = root;
-      scheduleRewrite(root);
+      if (replacing || accepting) return;
+      if (!settings.enabled || !settings.autoSuggest || !isFocusInEditable(compose)) return;
+      activeElement = compose;
+      scheduleRewrite(compose);
     });
-    mutationObserver.observe(root, {
+    mutationObserver.observe(observeTarget, {
       childList: true,
       subtree: true,
       characterData: true,
@@ -689,13 +687,13 @@
   }
 
   function handleEditableActivity(sourceEl) {
-    if (!settings.enabled) return;
+    if (!settings.enabled || replacing || accepting) return;
     const root = resolveEditableRoot(sourceEl);
     if (!root) return;
-    activeElement = root;
+    activeElement = getWhatsAppCompose(root) || root;
     if (!settings.autoSuggest) return;
-    attachMutationObserver(root);
-    scheduleRewrite(root);
+    attachMutationObserver(activeElement);
+    scheduleRewrite(activeElement);
   }
 
   function onInput(e) {
@@ -721,8 +719,9 @@
       if (panel && !panel.hidden) hidePanel();
       return;
     }
-    activeElement = root;
-    attachMutationObserver(root);
+    activeElement = getWhatsAppCompose(root) || root;
+    attachMutationObserver(activeElement);
+    if (settings.autoSuggest) scheduleRewrite(activeElement);
     const h = ensureHint();
     const rect = root.getBoundingClientRect();
     h.style.top = `${Math.max(4, rect.top - 22)}px`;
@@ -764,7 +763,11 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && changes.corpwrite_settings) {
       settings = { ...settings, ...changes.corpwrite_settings.newValue };
-      if (!settings.autoSuggest) detachMutationObserver();
+      if (!settings.autoSuggest) {
+        detachMutationObserver();
+      } else if (activeElement) {
+        attachMutationObserver(activeElement);
+      }
     }
   });
 
@@ -774,6 +777,7 @@
 
   document.addEventListener("input", onInput, true);
   document.addEventListener("beforeinput", onBeforeInput, true);
+  document.addEventListener("compositionend", onInput, true);
   document.addEventListener("keyup", onKeyUp, true);
   document.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("keydown", onKeyDown, true);
