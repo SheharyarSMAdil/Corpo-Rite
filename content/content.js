@@ -644,8 +644,10 @@
         return;
       }
       if (!response?.ok) {
-        if (response?.error === "NO_API_KEY") {
-          showError("Add your OpenAI API key in CorpoRite settings.");
+        if (response?.error === "NO_TOKEN") {
+          showError("Sign in with Google in the CorpoRite popup to get started.");
+        } else if (response?.error === "NO_CREDITS") {
+          showError("No credits left. Buy more at your CorpoRite dashboard.");
         } else {
           showError(response?.error || "Could not generate suggestion.");
         }

@@ -14,24 +14,24 @@
       </header>
 
       <form id="settingsForm">
-        <section class="card">
-          <h2>OpenAI API</h2>
+        <section class="card" id="accountCard">
+          <h2>Account</h2>
           <p class="desc">
-            CorpoRite uses OpenAI to rewrite text. Your key is stored in Chrome sync storage and sent only to
-            <code>api.openai.com</code>.
+            Sign in with Google to use CorpoRite credits. No API key required.
           </p>
-          <label for="apiKey">API key</label>
-          <div class="api-row">
-            <input type="password" id="apiKey" placeholder="sk-…" autocomplete="off" />
-            <button type="button" id="toggleKey" class="btn-ghost">Show</button>
+          <div id="accountSignedOut">
+            <button type="button" class="btn-primary" id="signInBtn">Sign in with Google</button>
           </div>
-          <label for="model">Model</label>
-          <select id="model">
-            <option value="gpt-4o-mini">gpt-4o-mini (recommended)</option>
-            <option value="gpt-4o">gpt-4o</option>
-            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
-            <option value="gpt-4.1">gpt-4.1</option>
-          </select>
+          <div id="accountSignedIn" hidden>
+            <p class="account-email" id="accountEmail"></p>
+            <p class="account-credits">
+              <strong id="creditsBalance">—</strong> credits remaining
+            </p>
+            <div class="account-actions">
+              <button type="button" class="btn-ghost" id="openDashboard">Open dashboard</button>
+              <button type="button" class="btn-ghost" id="signOutBtn">Sign out</button>
+            </div>
+          </div>
         </section>
 
         <section class="card">
@@ -87,7 +87,7 @@
           <div class="switch-row">
             <div>
               <strong>Auto-suggest while typing</strong>
-              <p>When off, press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to open suggestions (saves API tokens).</p>
+              <p>When off, press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to open suggestions (saves credits).</p>
             </div>
             <label class="toggle">
               <input type="checkbox" id="autoSuggest" />
@@ -127,6 +127,7 @@
       <section class="card howto">
         <h2>How to use</h2>
         <ol>
+          <li>Sign in with Google and connect your account.</li>
           <li>Open a website (WhatsApp Web, Gmail, LinkedIn, etc.) and click a text field.</li>
           <li>Press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> for suggestions (or enable auto-suggest while typing).</li>
           <li>Click <strong>Accept</strong> or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to replace your text.</li>

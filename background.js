@@ -1,69 +1,42 @@
-import { FORMALITY_LEVELS, DEFAULT_SETTINGS, STORAGE_KEYS, LENGTH_MODIFIERS } from "./shared/constants.js";
+import { DEFAULT_SETTINGS, STORAGE_KEYS, API_BASE_URL } from "./shared/constants.js";
+import { getAuthToken } from "./shared/auth.js";
 
 async function getSettings() {
   const result = await chrome.storage.sync.get(STORAGE_KEYS.settings);
   return { ...DEFAULT_SETTINGS, ...result[STORAGE_KEYS.settings] };
 }
 
-function buildSystemPrompt(settings) {
-  const formality = FORMALITY_LEVELS[settings.formality] ?? FORMALITY_LEVELS.professional;
-  const toneLine = settings.preserveTone
-    ? "Preserve the speaker's original intent, warmth, and personality while fixing grammar and clarity."
-    : "Optimize for neutral corporate tone; do not mirror casual Hinglish phrasing.";
-
-  return `You are CorpoRite, an expert assistant that converts Hinglish (Hindi written in Roman/Latin script, often mixed with English) into polished corporate English.
-
-Rules:
-- Input may be Hinglish, Roman Hindi, or informal Indian English. Detect and rewrite only what needs improvement.
-- ${formality.instruction}
-- ${toneLine}
-- Keep names, numbers, dates, and product terms unchanged unless clearly wrong.
-- If the input is already correct professional English, return it unchanged.
-- Return ONLY the rewritten text. No quotes, labels, or explanation.`;
-}
-
-function buildUserPrompt(text, lengthMode) {
-  if (lengthMode === "extend") {
-    return `Rewrite this text for corporate use. ${LENGTH_MODIFIERS.extend}\n\n${text}`;
-  }
-  if (lengthMode === "shorten") {
-    return `Rewrite this text for corporate use. ${LENGTH_MODIFIERS.shorten}\n\n${text}`;
-  }
-  return `Rewrite this text for corporate use:\n\n${text}`;
-}
-
-async function rewriteWithOpenAI(text, settings, lengthMode = null) {
-  if (!settings.apiKey?.trim()) {
-    throw new Error("NO_API_KEY");
+async function rewriteViaBackend(text, settings, lengthMode = null) {
+  const token = await getAuthToken();
+  if (!token) {
+    throw new Error("NO_TOKEN");
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${API_BASE_URL}/api/rewrite`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${settings.apiKey.trim()}`,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      model: settings.model || "gpt-4o-mini",
-      temperature: settings.preserveTone ? 0.5 : 0.3,
-      messages: [
-        { role: "system", content: buildSystemPrompt(settings) },
-        { role: "user", content: buildUserPrompt(text, lengthMode) },
-      ],
-      max_tokens: 1024,
+      text,
+      formality: settings.formality,
+      preserveTone: settings.preserveTone,
+      lengthMode,
     }),
   });
 
+  const data = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const message = err?.error?.message || `API error (${response.status})`;
-    throw new Error(message);
+    if (data.error === "NO_CREDITS") throw new Error("NO_CREDITS");
+    if (data.error === "NO_TOKEN") throw new Error("NO_TOKEN");
+    throw new Error(data.error || `API error (${response.status})`);
   }
 
-  const data = await response.json();
-  const suggestion = data.choices?.[0]?.message?.content?.trim();
+  const suggestion = data.suggestion?.trim();
   if (!suggestion) throw new Error("Empty response from API");
-  return suggestion;
+  return { suggestion, creditsRemaining: data.creditsRemaining };
 }
 
 async function triggerSuggestOnActiveTab() {
@@ -85,8 +58,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ ok: false, error: "Extension is disabled" });
           return;
         }
-        const suggestion = await rewriteWithOpenAI(message.text, settings, message.lengthMode);
-        sendResponse({ ok: true, suggestion });
+        const result = await rewriteViaBackend(message.text, settings, message.lengthMode);
+        sendResponse({
+          ok: true,
+          suggestion: result.suggestion,
+          creditsRemaining: result.creditsRemaining,
+        });
       } catch (err) {
         sendResponse({ ok: false, error: err.message || "Rewrite failed" });
       }
@@ -95,10 +72,38 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "GET_SETTINGS") {
-    getSettings().then((settings) => {
-      const { apiKey, ...safe } = settings;
-      sendResponse({ ok: true, settings: { ...safe, hasApiKey: Boolean(apiKey?.trim()) } });
-    });
+    (async () => {
+      const settings = await getSettings();
+      const signedIn = Boolean(await getAuthToken());
+      sendResponse({
+        ok: true,
+        settings: { ...settings, isSignedIn: signedIn },
+      });
+    })();
+    return true;
+  }
+
+  if (message.type === "GET_CREDITS") {
+    (async () => {
+      try {
+        const token = await getAuthToken();
+        if (!token) {
+          sendResponse({ ok: false, error: "NO_TOKEN" });
+          return;
+        }
+        const response = await fetch(`${API_BASE_URL}/api/credits`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          sendResponse({ ok: false, error: data.error || "Failed to load credits" });
+          return;
+        }
+        sendResponse({ ok: true, ...data });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message || "Failed to load credits" });
+      }
+    })();
     return true;
   }
 });

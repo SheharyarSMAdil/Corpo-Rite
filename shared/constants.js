@@ -30,9 +30,10 @@ export const DEFAULT_SETTINGS = {
   preserveTone: false,
   debounceMs: 700,
   minChars: 8,
-  apiKey: "",
-  model: "gpt-4o-mini",
 };
+
+/** Set to your deployed CorpoRite web app URL (no trailing slash). */
+export const API_BASE_URL = "http://localhost:3000";
 
 export const SHORTCUT_LABEL = "Alt+Shift+C";
 
@@ -43,4 +44,5 @@ export const LENGTH_MODIFIERS = {
 
 export const STORAGE_KEYS = {
   settings: "corpwrite_settings",
+  authToken: "corpwrite_auth_token",
 };

@@ -212,3 +212,21 @@ kbd {
   border-radius: 4px;
   background: #f8fafc;
 }
+
+.account-email {
+  font-size: 14px;
+  color: #334155;
+  margin-bottom: 8px;
+}
+
+.account-credits {
+  font-size: 15px;
+  color: #475569;
+  margin-bottom: 12px;
+}
+
+.account-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

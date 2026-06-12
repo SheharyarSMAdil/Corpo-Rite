@@ -21,6 +21,20 @@
     </header>
 
     <main class="main">
+      <section class="account" id="accountSection">
+        <div id="signedOutView">
+          <p class="hint">Sign in to use your CorpoRite credits.</p>
+          <button type="button" class="btn-signin" id="signInBtn">Sign in with Google</button>
+        </div>
+        <div id="signedInView" hidden>
+          <div class="credits-row">
+            <span class="credits-label">Credits</span>
+            <span class="credits-value" id="creditsBalance">—</span>
+          </div>
+          <button type="button" class="btn-link" id="signOutBtn">Sign out</button>
+        </div>
+      </section>
+
       <section class="field">
         <label for="formality">Formality</label>
         <select id="formality">
@@ -34,7 +48,7 @@
       <section class="field row">
         <div>
           <label for="autoSuggest">Auto-suggest while typing</label>
-          <p class="hint">Off by default — uses API only when you press the shortcut.</p>
+          <p class="hint">Off by default — saves credits when using the shortcut.</p>
         </div>
         <label class="toggle small">
           <input type="checkbox" id="autoSuggest" />
@@ -55,10 +69,11 @@
 
       <section class="status" id="status">
         <span class="dot" id="statusDot"></span>
-        <span id="statusText">Checking API key…</span>
+        <span id="statusText">Checking account…</span>
       </section>
 
-      <a class="link" href="#" id="openOptions">Full settings & API key →</a>
+      <a class="link" href="#" id="openOptions">Full settings →</a>
+      <a class="link" href="#" id="openDashboard">Buy credits on dashboard →</a>
     </main>
 
     <footer class="footer">
