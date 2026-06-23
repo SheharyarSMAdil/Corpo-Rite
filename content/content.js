@@ -168,32 +168,160 @@
     return range;
   }
 
+  function selectSpanInEditor(el, start, end) {
+    const range = createRangeFromOffsets(el, start, end);
+    const doc = el.ownerDocument;
+    const sel = doc?.defaultView?.getSelection();
+    if (!sel) return null;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return { doc, sel, range };
+  }
+
   /**
-   * WhatsApp uses Lexical — must update editor state via input events only.
-   * Never rebuild DOM directly or Send will use stale internal text.
+   * Direct DOM text replacement — Lexical (WhatsApp) ignores programmatic
+   * selection and appends via execCommand/beforeinput instead of replacing.
    */
-  function replaceWhatsAppCompose(el, text) {
+  function replaceTextInRange(doc, sel, range, replacementText) {
+    const startContainer = range.startContainer;
+    const endContainer = range.endContainer;
+
+    if (
+      startContainer === endContainer &&
+      startContainer.nodeType === Node.TEXT_NODE
+    ) {
+      const textNode = startContainer;
+      const startOffset = range.startOffset;
+      const endOffset = range.endOffset;
+      const oldText = textNode.textContent || "";
+      textNode.textContent =
+        oldText.slice(0, startOffset) + replacementText + oldText.slice(endOffset);
+
+      const newRange = doc.createRange();
+      const cursor = startOffset + replacementText.length;
+      newRange.setStart(textNode, cursor);
+      newRange.setEnd(textNode, cursor);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      return;
+    }
+
+    range.deleteContents();
+    const textNode = doc.createTextNode(replacementText);
+    range.insertNode(textNode);
+
+    const newRange = doc.createRange();
+    newRange.setStartAfter(textNode);
+    newRange.setEndAfter(textNode);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+  }
+
+  function replaceWhatsAppLexicalSpan(compose, text) {
+    const lexicalText = compose.querySelector("[data-lexical-text='true']");
+    if (!lexicalText) return false;
+
+    if (lexicalText.firstChild?.nodeType === Node.TEXT_NODE) {
+      lexicalText.firstChild.textContent = text;
+      const doc = compose.ownerDocument;
+      const sel = doc?.defaultView?.getSelection();
+      if (sel) {
+        const newRange = doc.createRange();
+        const textNode = lexicalText.firstChild;
+        const cursor = text.length;
+        newRange.setStart(textNode, cursor);
+        newRange.setEnd(textNode, cursor);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+      }
+    } else {
+      lexicalText.textContent = text;
+    }
+    return true;
+  }
+
+  function getWhatsAppReplaceSpan(ctx, compose) {
+    const currentFull = getText(compose);
+    const originalSegment = ctx ? getOriginalSegment(ctx) : "";
+    const start = ctx?.originalStart ?? ctx?.start ?? 0;
+    const end = ctx?.originalEnd ?? ctx?.end ?? currentFull.length;
+
+    if (originalSegment && currentFull.slice(start, end) === originalSegment) {
+      return { start, end };
+    }
+
+    if (originalSegment) {
+      const idx = currentFull.indexOf(originalSegment);
+      if (idx >= 0) {
+        return { start: idx, end: idx + originalSegment.length };
+      }
+    }
+
+    return { start: 0, end: currentFull.length };
+  }
+
+  /**
+   * WhatsApp Web Lexical keeps cursor state internally and ignores
+   * programmatic selectAll/insertText — use direct DOM replacement.
+   */
+  function replaceWhatsAppCompose(el, text, ctx = null) {
     const compose = getWhatsAppCompose(el) || el;
     replacing = true;
 
     try {
       compose.focus();
-      selectAllInEditable(compose);
+      const span = getWhatsAppReplaceSpan(ctx, compose);
+      const setup = selectSpanInEditor(compose, span.start, span.end);
 
-      const before = new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertReplacementText",
-        data: text,
-      });
-      compose.dispatchEvent(before);
-      if (before.defaultPrevented) return;
+      if (setup) {
+        replaceTextInRange(setup.doc, setup.sel, setup.range, text);
+      }
 
-      // insertText with full selection replaces content; Lexical listens to native input
-      document.execCommand("insertText", false, text);
+      if (!textMatches(compose, text)) {
+        replaceWhatsAppLexicalSpan(compose, text);
+      }
+
+      compose.dispatchEvent(
+        new InputEvent("input", { bubbles: true, cancelable: false })
+      );
     } finally {
       replacing = false;
     }
+  }
+
+  /**
+   * Other Lexical editors (Gmail, etc.) — select all, then one insert path.
+   */
+  function insertReplacementInEditable(el, text) {
+    el.focus();
+    selectAllInEditable(el);
+
+    document.execCommand("insertText", false, text);
+    if (textMatches(el, text)) return;
+
+    selectAllInEditable(el);
+    document.execCommand("delete", false, null);
+    selectAllInEditable(el);
+    document.execCommand("insertText", false, text);
+  }
+
+  function replaceEditableFull(el, text) {
+    if (isWhatsAppCompose(el)) {
+      replaceWhatsAppCompose(el, text);
+      return;
+    }
+
+    if (isLexicalEditor(el)) {
+      replacing = true;
+      try {
+        insertReplacementInEditable(el, text);
+      } finally {
+        replacing = false;
+      }
+      return;
+    }
+
+    replaceContentEditableRange(el, 0, getText(el).length, text);
   }
 
   /** Generic Lexical: delete range, insert once. */
@@ -239,11 +367,7 @@
   function setText(el, text) {
     if (!el) return;
     if (el.isContentEditable) {
-      if (isWhatsAppCompose(el)) {
-        replaceWhatsAppCompose(el, text);
-      } else {
-        replaceContentEditableRange(el, 0, getText(el).length, text);
-      }
+      replaceEditableFull(el, text);
       return;
     }
     const proto = el.tagName === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -494,7 +618,73 @@
     panel.querySelector("[data-regenerate]").disabled = false;
   }
 
-  function showSuggestion(suggestion, context) {
+  function anchorContext(context, prior = null) {
+    const sourceFull = prior?.originalFull ?? context.full;
+    const sourceStart = prior?.originalStart ?? context.start;
+    const sourceEnd = prior?.originalEnd ?? context.end;
+    return {
+      ...context,
+      originalText: prior?.originalText ?? context.text,
+      originalStart: sourceStart,
+      originalEnd: sourceEnd,
+      originalFull: sourceFull,
+    };
+  }
+
+  function getOriginalSegment(ctx) {
+    const start = ctx.originalStart ?? ctx.start;
+    const end = ctx.originalEnd ?? ctx.end;
+    return (
+      ctx.originalText ?? (ctx.originalFull ?? ctx.full)?.slice(start, end) ?? ""
+    );
+  }
+
+  function buildAcceptReplacement(ctx, el) {
+    const { suggestion } = ctx;
+
+    // WhatsApp compose holds a single message — always replace all of it.
+    if (isWhatsAppCompose(el)) {
+      return suggestion;
+    }
+
+    const currentFull = getText(el);
+    const originalSegment = getOriginalSegment(ctx);
+
+    // After extend/shorten the field still has the user's original text — swap it entirely.
+    if (
+      ctx.lengthAdjusted &&
+      originalSegment &&
+      normalizeCompareText(currentFull) === normalizeCompareText(originalSegment)
+    ) {
+      return suggestion;
+    }
+
+    const start = ctx.originalStart ?? ctx.start;
+    const end = ctx.originalEnd ?? ctx.end;
+
+    if (originalSegment && currentFull.slice(start, end) === originalSegment) {
+      return currentFull.slice(0, start) + suggestion + currentFull.slice(end);
+    }
+
+    if (originalSegment) {
+      const idx = currentFull.indexOf(originalSegment);
+      if (idx >= 0) {
+        return (
+          currentFull.slice(0, idx) +
+          suggestion +
+          currentFull.slice(idx + originalSegment.length)
+        );
+      }
+    }
+
+    if (ctx.lengthAdjusted || ctx.mode === "full") {
+      return suggestion;
+    }
+
+    return currentFull.slice(0, start) + suggestion + currentFull.slice(end);
+  }
+
+  function showSuggestion(suggestion, context, options = {}) {
     const p = ensurePanel();
     const sug = p.querySelector("[data-suggestion]");
     const unchanged = suggestion.trim() === context.text.trim();
@@ -512,15 +702,24 @@
       p.querySelector("[data-shorten]").disabled = false;
     }
     p.querySelector("[data-regenerate]").disabled = false;
-    lastContext = { ...context, suggestion, targetElement: activeElement };
+    const prior = options.isLengthAdjust ? lastContext : null;
+    lastContext = {
+      ...anchorContext(context, prior),
+      suggestion,
+      targetElement: activeElement,
+      lengthAdjusted: Boolean(options.isLengthAdjust || prior?.lengthAdjusted),
+    };
   }
 
   function requestLengthAdjust(lengthMode) {
     if (!lastContext?.suggestion) return;
-    const context = {
-      ...lastContext,
-      text: lastContext.suggestion,
-    };
+    const context = anchorContext(
+      {
+        ...lastContext,
+        text: lastContext.suggestion,
+      },
+      lastContext
+    );
     requestRewrite(context, true, { lengthMode, keepPanel: true });
   }
 
@@ -548,26 +747,38 @@
     if (accepting || !lastContext) return;
     accepting = true;
 
-    const { start, end, full, suggestion, targetElement } = lastContext;
+    const { suggestion, targetElement } = lastContext;
     const el = targetElement || activeElement;
+    const compose = el ? getWhatsAppCompose(el) : null;
 
-    try {
-      if (!el) return;
-
-      if (el.isContentEditable) {
-        if (isWhatsAppCompose(el)) {
-          replaceWhatsAppCompose(el, suggestion);
-          el.focus();
-        } else {
-          replaceContentEditableRange(el, start, end, suggestion);
-        }
-      } else {
-        setText(el, full.slice(0, start) + suggestion + full.slice(end));
-      }
-
+    const finish = () => {
       copyToClipboard(suggestion);
       showToast("Accepted — copied to clipboard");
-    } finally {
+      accepting = false;
+      hidePanel();
+    };
+
+    try {
+      if (!el) {
+        accepting = false;
+        return;
+      }
+
+      if (compose) {
+        compose.focus();
+        try {
+          replaceWhatsAppCompose(compose, suggestion, lastContext);
+        } finally {
+          finish();
+        }
+        return;
+      }
+
+      const replacement = buildAcceptReplacement(lastContext, el);
+      setText(el, replacement);
+      el.focus?.();
+      finish();
+    } catch {
       accepting = false;
       hidePanel();
     }
@@ -651,7 +862,7 @@
         }
         return;
       }
-      showSuggestion(response.suggestion, context);
+      showSuggestion(response.suggestion, context, { isLengthAdjust: Boolean(lengthMode) });
     });
   }
 
