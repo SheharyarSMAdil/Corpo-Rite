@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../shared/constants.js";
+import { CHAT_CONTEXT_MAX_CHARS, DEFAULT_SETTINGS, STORAGE_KEYS } from "../shared/constants.js";
 import { parseAllowedSites } from "../shared/siteMatcherModule.js";
 
 async function loadSettings() {
@@ -24,7 +24,10 @@ function fillForm(settings) {
   document.getElementById("model").value = settings.model || "gpt-4o-mini";
   document.getElementById("formality").value = settings.formality || "professional";
   document.getElementById("preserveTone").checked = Boolean(settings.preserveTone);
+  document.getElementById("useChatContext").checked = settings.useChatContext !== false;
+  document.getElementById("chatContext").value = settings.chatContext || "";
   document.getElementById("autoSuggest").checked = Boolean(settings.autoSuggest);
+  document.getElementById("showLauncherIcon").checked = settings.showLauncherIcon !== false;
   document.getElementById("restrictToSites").checked = Boolean(settings.restrictToSites);
   document.getElementById("allowedSites").value = allowedSitesToText(settings.allowedSites);
   document.getElementById("debounceMs").value = settings.debounceMs ?? 700;
@@ -37,13 +40,22 @@ function setAllowedSitesEnabled(enabled) {
   document.getElementById("addCurrentSite").disabled = !enabled;
 }
 
+function setChatContextEnabled(enabled) {
+  document.getElementById("chatContext").disabled = !enabled;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const settings = await loadSettings();
   fillForm(settings);
   setAllowedSitesEnabled(settings.restrictToSites);
+  setChatContextEnabled(settings.useChatContext !== false);
 
   document.getElementById("restrictToSites").addEventListener("change", (e) => {
     setAllowedSitesEnabled(e.target.checked);
+  });
+
+  document.getElementById("useChatContext").addEventListener("change", (e) => {
+    setChatContextEnabled(e.target.checked);
   });
 
   document.getElementById("toggleKey").addEventListener("click", () => {
@@ -94,7 +106,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       model: document.getElementById("model").value,
       formality: document.getElementById("formality").value,
       preserveTone: document.getElementById("preserveTone").checked,
+      useChatContext: document.getElementById("useChatContext").checked,
+      chatContext: document
+        .getElementById("chatContext")
+        .value.trim()
+        .slice(0, CHAT_CONTEXT_MAX_CHARS),
       autoSuggest: document.getElementById("autoSuggest").checked,
+      showLauncherIcon: document.getElementById("showLauncherIcon").checked,
       restrictToSites: document.getElementById("restrictToSites").checked,
       allowedSites: textToAllowedSites(document.getElementById("allowedSites").value),
       debounceMs: Number(document.getElementById("debounceMs").value) || 700,

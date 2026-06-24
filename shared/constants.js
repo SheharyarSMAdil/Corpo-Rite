@@ -21,6 +21,8 @@ export const FORMALITY_LEVELS = {
   },
 };
 
+export const CHAT_CONTEXT_MAX_CHARS = 2000;
+
 export const DEFAULT_SETTINGS = {
   enabled: true,
   autoSuggest: false,
@@ -28,6 +30,9 @@ export const DEFAULT_SETTINGS = {
   allowedSites: [],
   formality: "professional",
   preserveTone: false,
+  useChatContext: true,
+  chatContext: "",
+  showLauncherIcon: true,
   debounceMs: 700,
   minChars: 8,
   apiKey: "",

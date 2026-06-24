@@ -4,12 +4,16 @@
 
   const DEBOUNCE_DEFAULT = 700;
   const MIN_CHARS_DEFAULT = 8;
+  const CHAT_CONTEXT_MAX_CHARS = 2000;
 
   let settings = {
     enabled: true,
     autoSuggest: false,
     restrictToSites: false,
     allowedSites: [],
+    useChatContext: true,
+    chatContext: "",
+    showLauncherIcon: true,
     debounceMs: DEBOUNCE_DEFAULT,
     minChars: MIN_CHARS_DEFAULT,
   };
@@ -22,6 +26,8 @@
   let debounceTimer = null;
   let requestId = 0;
   let panel = null;
+  let launcher = null;
+  let pendingContext = null;
   let hint = null;
   let lastContext = null;
   let mutationObserver = null;
@@ -37,7 +43,16 @@
     if (!siteAllowed) {
       detachMutationObserver();
       if (panel && !panel.hidden) hidePanel();
+      else hideLauncher();
     }
+  }
+
+  function isLauncherMode() {
+    return settings.showLauncherIcon !== false;
+  }
+
+  function isLauncherVisible() {
+    return launcher && !launcher.hidden;
   }
 
   function canRunOnThisPage() {
@@ -445,6 +460,9 @@
     const root = document.createElement("div");
     root.id = "corpwrite-root";
     root.innerHTML = `
+      <button type="button" class="corpwrite-launcher" hidden aria-label="Open CorpoRite suggestion" title="Open CorpoRite">
+        <img src="${chrome.runtime.getURL("icons/icon16.png")}" alt="" />
+      </button>
       <div class="corpwrite-panel" role="dialog" aria-label="CorpoRite suggestion" hidden>
         <div class="corpwrite-header">
           <div class="corpwrite-brand">
@@ -455,6 +473,34 @@
           <button type="button" class="corpwrite-close" title="Dismiss" aria-label="Dismiss">&times;</button>
         </div>
         <div class="corpwrite-body">
+          <div class="corpwrite-label">Chat context (optional)</div>
+          <textarea
+            class="corpwrite-context"
+            data-chat-context
+            rows="3"
+            maxlength="2000"
+            placeholder="Recent messages, recipient, or topic — e.g. Manager asked for the report by EOD"
+          ></textarea>
+          <div class="corpwrite-context-actions">
+            <button
+              type="button"
+              class="corpwrite-btn corpwrite-btn-primary corpwrite-btn-compact"
+              data-generate-reply
+              disabled
+              title="Generate a new reply from the conversation context"
+            >
+              Generate reply
+            </button>
+            <button
+              type="button"
+              class="corpwrite-btn corpwrite-btn-secondary corpwrite-btn-compact"
+              data-apply-context
+              disabled
+              title="Regenerate the suggestion using the context above"
+            >
+              Apply context
+            </button>
+          </div>
           <div class="corpwrite-label">Original</div>
           <div class="corpwrite-original" data-original></div>
           <div class="corpwrite-label">Suggestion</div>
@@ -472,7 +518,14 @@
       </div>
     `;
     document.documentElement.appendChild(root);
+    launcher = root.querySelector(".corpwrite-launcher");
     panel = root.querySelector(".corpwrite-panel");
+
+    launcher.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openPanelFromLauncher();
+    });
 
     root.querySelector(".corpwrite-close").addEventListener("click", hidePanel);
     root.querySelector("[data-dismiss]").addEventListener("click", hidePanel);
@@ -481,7 +534,17 @@
       acceptSuggestion();
     });
     root.querySelector("[data-regenerate]").addEventListener("click", () => {
-      if (lastContext) requestRewrite(lastContext, true);
+      if (lastContext?.generatedReply) {
+        requestGenerateReply();
+        return;
+      }
+      if (lastContext) requestRewrite(lastContext, true, { keepPanel: true, regenerate: true });
+    });
+    root.querySelector("[data-apply-context]").addEventListener("click", () => {
+      requestContextRegenerate();
+    });
+    root.querySelector("[data-generate-reply]").addEventListener("click", () => {
+      requestGenerateReply();
     });
     root.querySelector("[data-extend]").addEventListener("click", () => {
       requestLengthAdjust("extend");
@@ -494,14 +557,56 @@
       "mousedown",
       (e) => {
         if (root.contains(e.target)) return;
-        if (panel && !panel.hidden && e.target.closest?.(".corpwrite-panel")) return;
-        hidePanel();
+        dismissUi();
       },
       true
     );
 
     initPanelDrag();
     return panel;
+  }
+
+  function dismissUi() {
+    if ((panel && !panel.hidden) || isLauncherVisible()) {
+      hidePanel();
+      requestId++;
+    }
+  }
+
+  function positionLauncher(el) {
+    ensurePanel();
+    if (!launcher || !el) return;
+    const rect = el.getBoundingClientRect();
+    const size = 36;
+    let left = rect.right - size - 4;
+    let top = rect.bottom - size - 4;
+    if (top + size > window.innerHeight - 12) {
+      top = Math.max(12, rect.top - size - 4);
+    }
+    left = Math.max(12, Math.min(left, window.innerWidth - size - 12));
+    top = Math.max(12, Math.min(top, window.innerHeight - size - 12));
+    launcher.style.left = `${left}px`;
+    launcher.style.top = `${top}px`;
+  }
+
+  function showLauncher(el, context) {
+    ensurePanel();
+    pendingContext = context;
+    if (panel) panel.hidden = true;
+    positionLauncher(el);
+    launcher.hidden = false;
+  }
+
+  function hideLauncher() {
+    if (launcher) launcher.hidden = true;
+    pendingContext = null;
+  }
+
+  function openPanelFromLauncher() {
+    if (!pendingContext) return;
+    const context = pendingContext;
+    hideLauncher();
+    requestRewrite(context, true, { fromLauncher: true });
   }
 
   function clampPanelToViewport() {
@@ -568,7 +673,7 @@
       return;
     }
     const rect = el.getBoundingClientRect();
-    const panelHeight = 260;
+    const panelHeight = 400;
     let top = rect.bottom + 8;
     if (top + panelHeight > window.innerHeight - 12) {
       top = Math.max(12, rect.top - panelHeight - 8);
@@ -584,8 +689,16 @@
     if (!panel) return;
     panel.querySelector("[data-accept]").disabled = disabled;
     panel.querySelector("[data-regenerate]").disabled = disabled;
+    panel.querySelector("[data-generate-reply]").disabled = disabled;
+    panel.querySelector("[data-apply-context]").disabled = disabled;
     panel.querySelector("[data-extend]").disabled = disabled;
     panel.querySelector("[data-shorten]").disabled = disabled;
+  }
+
+  function setContextActionButtonsEnabled(enabled) {
+    if (!panel) return;
+    panel.querySelector("[data-generate-reply]").disabled = !enabled;
+    panel.querySelector("[data-apply-context]").disabled = !enabled || !lastContext;
   }
 
   function setPanelLoading(message) {
@@ -596,16 +709,43 @@
     setPanelButtonsDisabled(true);
   }
 
+  function getPanelChatContext() {
+    if (!panel) return "";
+    return panel.querySelector("[data-chat-context]")?.value?.trim() ?? "";
+  }
+
+  function getDefaultChatContext() {
+    if (settings.useChatContext === false) return "";
+    return (settings.chatContext || "").trim();
+  }
+
+  function getEffectiveChatContext() {
+    const panelCtx = getPanelChatContext();
+    if (panelCtx) return panelCtx.slice(0, CHAT_CONTEXT_MAX_CHARS);
+    return getDefaultChatContext().slice(0, CHAT_CONTEXT_MAX_CHARS);
+  }
+
+  function prefillPanelChatContext(force = false) {
+    if (!panel) return;
+    const field = panel.querySelector("[data-chat-context]");
+    if (!field) return;
+    if (!force && field.value.trim()) return;
+    field.value = getDefaultChatContext();
+  }
+
   function showPanel(el, context) {
     const p = ensurePanel();
     positionPanel(el);
     p.hidden = false;
+    prefillPanelChatContext(true);
     p.querySelector("[data-original]").textContent = context.text;
     setPanelLoading("Improving your text…");
+    setContextActionButtonsEnabled(false);
   }
 
   function hidePanel() {
     if (panel) panel.hidden = true;
+    hideLauncher();
     lastContext = null;
   }
 
@@ -616,6 +756,7 @@
     sug.textContent = message;
     setPanelButtonsDisabled(true);
     panel.querySelector("[data-regenerate]").disabled = false;
+    setContextActionButtonsEnabled(Boolean(lastContext));
   }
 
   function anchorContext(context, prior = null) {
@@ -641,6 +782,11 @@
 
   function buildAcceptReplacement(ctx, el) {
     const { suggestion } = ctx;
+
+    // Generated or context-based replies replace the whole field on accept.
+    if (ctx.generatedReply) {
+      return suggestion;
+    }
 
     // WhatsApp compose holds a single message — always replace all of it.
     if (isWhatsAppCompose(el)) {
@@ -702,13 +848,93 @@
       p.querySelector("[data-shorten]").disabled = false;
     }
     p.querySelector("[data-regenerate]").disabled = false;
+    setContextActionButtonsEnabled(true);
     const prior = options.isLengthAdjust ? lastContext : null;
     lastContext = {
       ...anchorContext(context, prior),
       suggestion,
       targetElement: activeElement,
       lengthAdjusted: Boolean(options.isLengthAdjust || prior?.lengthAdjusted),
+      generatedReply: Boolean(options.generatedReply || prior?.generatedReply),
     };
+  }
+
+  function getDraftHintForReply() {
+    if (lastContext) {
+      const original = getOriginalSegment(lastContext);
+      if (original) return original;
+    }
+    const el = activeElement || resolveEditableRoot(document.activeElement);
+    return el ? getText(el).trim() : "";
+  }
+
+  function requestGenerateReply() {
+    const chatContext = getEffectiveChatContext();
+    if (!chatContext) {
+      showToast("Add chat context above, then click Generate reply");
+      return;
+    }
+
+    const id = ++requestId;
+    setPanelLoading("Generating reply…");
+
+    chrome.runtime.sendMessage(
+      {
+        type: "GENERATE_REPLY",
+        chatContext,
+        draftHint: getDraftHintForReply(),
+      },
+      (response) => {
+        if (id !== requestId) return;
+        if (chrome.runtime.lastError) {
+          showError("Extension error. Reload the page and try again.");
+          return;
+        }
+        if (!response?.ok) {
+          if (response?.error === "NO_API_KEY") {
+            showError("Add your OpenAI API key in CorpoRite settings.");
+          } else {
+            showError(response?.error || "Could not generate reply.");
+          }
+          return;
+        }
+
+        const baseContext =
+          lastContext ||
+          getContextForRewrite(activeElement) || {
+            text: getDraftHintForReply(),
+            mode: "full",
+            start: 0,
+            end: getDraftHintForReply().length,
+            full: getDraftHintForReply(),
+          };
+
+        if (panel) {
+          panel.querySelector("[data-original]").textContent =
+            baseContext.text || "(generated from context)";
+        }
+
+        showSuggestion(response.suggestion, baseContext, { generatedReply: true });
+      }
+    );
+  }
+
+  function requestContextRegenerate() {
+    if (!lastContext) return;
+    const chatContext = getEffectiveChatContext();
+    if (!chatContext) {
+      showToast("Add chat context above, then click Apply context");
+      return;
+    }
+
+    const originalText = getOriginalSegment(lastContext);
+    if (!originalText) return;
+
+    const context = {
+      ...anchorContext({ ...lastContext, text: originalText }, lastContext),
+      lengthAdjusted: false,
+    };
+    requestRewrite(context, true, { keepPanel: true, applyContext: true });
   }
 
   function requestLengthAdjust(lengthMode) {
@@ -833,7 +1059,19 @@
 
   async function requestRewrite(context, force, options = {}) {
     if ((!settings.enabled || !siteAllowed) && !force) return;
-    const { lengthMode = null, keepPanel = false } = options;
+    const {
+      lengthMode = null,
+      keepPanel = false,
+      regenerate = false,
+      applyContext = false,
+      fromLauncher = false,
+    } = options;
+
+    if (!keepPanel && !fromLauncher && isLauncherMode()) {
+      showLauncher(activeElement, context);
+      return;
+    }
+
     const id = ++requestId;
 
     if (keepPanel) {
@@ -842,28 +1080,40 @@
           ? "Extending your text…"
           : lengthMode === "shorten"
             ? "Shortening your text…"
-            : "Improving your text…";
+            : applyContext
+              ? "Applying context…"
+              : regenerate
+                ? "Regenerating…"
+                : "Improving your text…";
       setPanelLoading(loadingMsg);
     } else {
       showPanel(activeElement, context);
     }
 
-    chrome.runtime.sendMessage({ type: "REWRITE", text: context.text, lengthMode }, (response) => {
-      if (id !== requestId) return;
-      if (chrome.runtime.lastError) {
-        showError("Extension error. Reload the page and try again.");
-        return;
-      }
-      if (!response?.ok) {
-        if (response?.error === "NO_API_KEY") {
-          showError("Add your OpenAI API key in CorpoRite settings.");
-        } else {
-          showError(response?.error || "Could not generate suggestion.");
+    chrome.runtime.sendMessage(
+      {
+        type: "REWRITE",
+        text: context.text,
+        lengthMode,
+        chatContext: getEffectiveChatContext(),
+      },
+      (response) => {
+        if (id !== requestId) return;
+        if (chrome.runtime.lastError) {
+          showError("Extension error. Reload the page and try again.");
+          return;
         }
-        return;
+        if (!response?.ok) {
+          if (response?.error === "NO_API_KEY") {
+            showError("Add your OpenAI API key in CorpoRite settings.");
+          } else {
+            showError(response?.error || "Could not generate suggestion.");
+          }
+          return;
+        }
+        showSuggestion(response.suggestion, context, { isLengthAdjust: Boolean(lengthMode) });
       }
-      showSuggestion(response.suggestion, context, { isLengthAdjust: Boolean(lengthMode) });
-    });
+    );
   }
 
   function detachMutationObserver() {
@@ -950,6 +1200,7 @@
     const root = resolveEditableRoot(e.target);
     if (!root) {
       if (panel && !panel.hidden) hidePanel();
+      else hideLauncher();
       return;
     }
     activeElement = getWhatsAppCompose(root) || root;
@@ -970,11 +1221,20 @@
       return;
     }
 
-    if (!panel || panel.hidden) return;
     if (e.key === "Escape") {
-      hidePanel();
-      requestId++;
+      if (panel && !panel.hidden) {
+        hidePanel();
+        requestId++;
+        return;
+      }
+      if (isLauncherVisible()) {
+        hideLauncher();
+        requestId++;
+        return;
+      }
     }
+
+    if (!panel || panel.hidden) return;
     if (e.key === "Enter" && e.ctrlKey && lastContext?.suggestion) {
       e.preventDefault();
       acceptSuggestion();
@@ -1016,7 +1276,12 @@
   document.addEventListener("keyup", onKeyUp, true);
   document.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("resize", clampPanelToViewport);
+  window.addEventListener("resize", () => {
+    clampPanelToViewport();
+    if (isLauncherVisible() && activeElement) {
+      positionLauncher(activeElement);
+    }
+  });
 
   loadSettings();
 })();

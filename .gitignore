@@ -1,4 +1,8 @@
 .DS_Store
+web/node_modules
+web/dist
+
+
 Thumbs.db
 *.log
 .env

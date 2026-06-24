@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CorpoRite",
-  "version": "1.3.4",
+  "version": "1.3.7",
   "commands": {
     "open-suggestion": {
       "suggested_key": {
